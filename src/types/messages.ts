@@ -8,7 +8,10 @@ export type EventMessageType =
   | 'REQUEST_INTERCEPTED'
   | 'GET_RULES'
   | 'RULES_UPDATED'
-  | 'SET_GLOBAL_ENABLED';
+  | 'SET_GLOBAL_ENABLED'
+  | 'GET_REQUEST_LOGS'
+  | 'CLEAR_REQUEST_LOGS'
+  | 'REQUEST_LOGS_RESPONSE';
 
 export interface BaseMessage {
   source: typeof MOCKFORGE_SOURCE;
@@ -31,7 +34,24 @@ export interface RulesUpdatedMessage extends BaseMessage {
   globalEnabled: boolean;
 }
 
+export interface GetRequestLogsMessage extends BaseMessage {
+  type: 'GET_REQUEST_LOGS';
+}
+
+export interface ClearRequestLogsMessage extends BaseMessage {
+  type: 'CLEAR_REQUEST_LOGS';
+}
+
+export interface RequestLogsResponseMessage extends BaseMessage {
+  type: 'REQUEST_LOGS_RESPONSE';
+  logs: InterceptedRequest[];
+}
+
 export type MockForgeMessage =
   | PingMessage
   | RequestInterceptedMessage
-  | RulesUpdatedMessage;
+  | RulesUpdatedMessage
+  | GetRequestLogsMessage
+  | ClearRequestLogsMessage
+  | RequestLogsResponseMessage;
+
