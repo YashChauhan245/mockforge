@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "MockForge - API Interceptor & Chaos Engine",
+  "version": "0.1.0",
+  "description": "In-browser API mocking, network chaos engineering, and TypeScript schema synthesis.",
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "action": {
+    "default_title": "Open MockForge Side Panel"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/index.ts"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/injected/index.ts"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
