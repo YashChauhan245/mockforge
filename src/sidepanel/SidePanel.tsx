@@ -1,18 +1,63 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Flame, 
   Activity, 
   Sliders, 
-  Plus, 
   Power, 
-  ShieldCheck, 
   Terminal,
   Zap
 } from 'lucide-react';
+import { RuleManager } from './components/RuleManager';
+import { NetworkInspector } from './components/NetworkInspector';
+import { MockRule } from '../types/rule';
+import { MOCKFORGE_SOURCE, RulesUpdatedMessage } from '../types/messages';
+
+const STORAGE_KEY_GLOBAL_ENABLED = 'mockforge_global_enabled';
+const STORAGE_KEY_RULES = 'mockforge_rules';
 
 export const SidePanel: React.FC = () => {
   const [globalEnabled, setGlobalEnabled] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'rules' | 'network' | 'chaos'>('rules');
+  const [rulesCount, setRulesCount] = useState<number>(0);
+  const [logsCount, setLogsCount] = useState<number>(0);
+
+  // Load global state from chrome.storage on mount
+  useEffect(() => {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      chrome.storage.local.get([STORAGE_KEY_GLOBAL_ENABLED, STORAGE_KEY_RULES], (result) => {
+        if (typeof result[STORAGE_KEY_GLOBAL_ENABLED] === 'boolean') {
+          setGlobalEnabled(result[STORAGE_KEY_GLOBAL_ENABLED]);
+        }
+        if (Array.isArray(result[STORAGE_KEY_RULES])) {
+          setRulesCount(result[STORAGE_KEY_RULES].length);
+        }
+      });
+    }
+  }, []);
+
+  // Toggle global master switch and broadcast to background service worker
+  const handleToggleGlobal = () => {
+    const nextState = !globalEnabled;
+    setGlobalEnabled(nextState);
+
+    if (typeof chrome !== 'undefined') {
+      if (chrome.storage?.local) {
+        chrome.storage.local.set({ [STORAGE_KEY_GLOBAL_ENABLED]: nextState });
+      }
+
+      // Query current rules to broadcast
+      chrome.storage.local.get([STORAGE_KEY_RULES], (result) => {
+        const rules: MockRule[] = Array.isArray(result[STORAGE_KEY_RULES]) ? result[STORAGE_KEY_RULES] : [];
+        const updateMsg: RulesUpdatedMessage = {
+          source: MOCKFORGE_SOURCE,
+          type: 'RULES_UPDATED',
+          rules,
+          globalEnabled: nextState,
+        };
+        chrome.runtime.sendMessage(updateMsg).catch(() => {});
+      });
+    }
+  };
 
   return (
     <div className="flex flex-col h-screen bg-[#0c0d12] text-slate-100 text-sm select-none">
@@ -35,7 +80,7 @@ export const SidePanel: React.FC = () => {
 
         {/* Global Master Kill Switch */}
         <button
-          onClick={() => setGlobalEnabled(!globalEnabled)}
+          onClick={handleToggleGlobal}
           className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-medium text-xs transition-all ${
             globalEnabled
               ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
@@ -59,7 +104,9 @@ export const SidePanel: React.FC = () => {
         >
           <Zap className="w-3.5 h-3.5" />
           Mock Rules
-          <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-[#232736] text-slate-300">0</span>
+          <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-[#232736] text-slate-300">
+            {rulesCount}
+          </span>
         </button>
 
         <button
@@ -72,7 +119,11 @@ export const SidePanel: React.FC = () => {
         >
           <Activity className="w-3.5 h-3.5" />
           Network Stream
-          <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-[#232736] text-slate-300">0</span>
+          {logsCount > 0 && (
+            <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-[#232736] text-slate-300">
+              {logsCount}
+            </span>
+          )}
         </button>
 
         <button
@@ -89,33 +140,19 @@ export const SidePanel: React.FC = () => {
       </nav>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto p-4">
+      <main className="flex-1 overflow-y-auto p-3">
         {activeTab === 'rules' && (
-          <div className="flex flex-col items-center justify-center h-full text-center py-12">
-            <div className="w-12 h-12 rounded-xl bg-[#14161f] border border-[#232736] flex items-center justify-center text-slate-400 mb-3 shadow-inner">
-              <Zap className="w-6 h-6 text-indigo-400" />
-            </div>
-            <h3 className="font-semibold text-slate-200 text-sm">No Mock Rules Configured</h3>
-            <p className="text-xs text-slate-400 max-w-xs mt-1 mb-4">
-              Create your first rule to intercept outgoing API endpoints and return custom forged payloads.
-            </p>
-            <button className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs shadow-lg shadow-indigo-600/20 transition-all">
-              <Plus className="w-3.5 h-3.5" />
-              New Mock Rule
-            </button>
-          </div>
+          <RuleManager 
+            globalEnabled={globalEnabled} 
+            onRulesCountChange={(count) => setRulesCount(count)} 
+          />
         )}
 
         {activeTab === 'network' && (
-          <div className="flex flex-col items-center justify-center h-full text-center py-12">
-            <div className="w-12 h-12 rounded-xl bg-[#14161f] border border-[#232736] flex items-center justify-center text-slate-400 mb-3">
-              <Activity className="w-6 h-6 text-emerald-400 animate-pulse" />
-            </div>
-            <h3 className="font-semibold text-slate-200 text-sm">Listening for API Traffic</h3>
-            <p className="text-xs text-slate-400 max-w-xs mt-1">
-              Trigger fetch or XHR network requests in the current browser tab to inspect live payloads and latency.
-            </p>
-          </div>
+          <NetworkInspector 
+            globalEnabled={globalEnabled} 
+            onRequestCountChange={(count) => setLogsCount(count)}
+          />
         )}
 
         {activeTab === 'chaos' && (
@@ -134,8 +171,8 @@ export const SidePanel: React.FC = () => {
       {/* Bottom Status Bar */}
       <footer className="flex items-center justify-between px-3 py-2 border-t border-[#232736] bg-[#14161f] text-[11px] text-slate-400">
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span>Event Bus Connected</span>
+          <span className={`w-2 h-2 rounded-full ${globalEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
+          <span>{globalEnabled ? 'Event Bus Connected' : 'Mocking Suspended'}</span>
         </div>
         <div className="flex items-center gap-1 text-slate-500">
           <Terminal className="w-3 h-3" />
