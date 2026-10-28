@@ -5,15 +5,14 @@ import {
   Sliders, 
   Plus, 
   Power, 
+  ShieldCheck, 
   Terminal,
   Zap
 } from 'lucide-react';
-import { NetworkInspector } from './components/NetworkInspector';
 
 export const SidePanel: React.FC = () => {
   const [globalEnabled, setGlobalEnabled] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<'rules' | 'network' | 'chaos'>('network');
-  const [networkCount, setNetworkCount] = useState<number>(0);
+  const [activeTab, setActiveTab] = useState<'rules' | 'network' | 'chaos'>('rules');
 
   return (
     <div className="flex flex-col h-screen bg-[#0c0d12] text-slate-100 text-sm select-none">
@@ -73,11 +72,7 @@ export const SidePanel: React.FC = () => {
         >
           <Activity className="w-3.5 h-3.5" />
           Network Stream
-          <span className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] ${
-            networkCount > 0 ? 'bg-indigo-600 text-white font-semibold' : 'bg-[#232736] text-slate-400'
-          }`}>
-            {networkCount}
-          </span>
+          <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-[#232736] text-slate-300">0</span>
         </button>
 
         <button
@@ -112,10 +107,15 @@ export const SidePanel: React.FC = () => {
         )}
 
         {activeTab === 'network' && (
-          <NetworkInspector
-            globalEnabled={globalEnabled}
-            onRequestCountChange={setNetworkCount}
-          />
+          <div className="flex flex-col items-center justify-center h-full text-center py-12">
+            <div className="w-12 h-12 rounded-xl bg-[#14161f] border border-[#232736] flex items-center justify-center text-slate-400 mb-3">
+              <Activity className="w-6 h-6 text-emerald-400 animate-pulse" />
+            </div>
+            <h3 className="font-semibold text-slate-200 text-sm">Listening for API Traffic</h3>
+            <p className="text-xs text-slate-400 max-w-xs mt-1">
+              Trigger fetch or XHR network requests in the current browser tab to inspect live payloads and latency.
+            </p>
+          </div>
         )}
 
         {activeTab === 'chaos' && (

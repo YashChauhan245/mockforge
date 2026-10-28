@@ -1,10 +1,12 @@
-import { MockForgeMessage, MOCKFORGE_SOURCE } from '../types/messages';
-import { InterceptedRequest } from '../types/rule';
+import { MockForgeMessage, MOCKFORGE_SOURCE, RulesUpdatedMessage } from '../types/messages';
+import { InterceptedRequest, MockRule } from '../types/rule';
 
 console.log('[MockForge Service Worker] Initialized.');
 
 const MAX_LOGS = 100;
 const STORAGE_KEY_LOGS = 'mockforge_request_logs';
+const STORAGE_KEY_RULES = 'mockforge_rules';
+const STORAGE_KEY_GLOBAL_ENABLED = 'mockforge_global_enabled';
 
 let inMemoryLogs: InterceptedRequest[] = [];
 
@@ -44,6 +46,29 @@ function updateBadge(count: number): void {
   }
 }
 
+// Broadcasts rule updates to all active browser tabs
+async function broadcastRulesToAllTabs(rules: MockRule[], globalEnabled: boolean): Promise<void> {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const updateMsg: RulesUpdatedMessage = {
+      source: MOCKFORGE_SOURCE,
+      type: 'RULES_UPDATED',
+      rules,
+      globalEnabled,
+    };
+
+    for (const tab of tabs) {
+      if (tab.id && tab.id > 0) {
+        chrome.tabs.sendMessage(tab.id, updateMsg).catch(() => {
+          // Tab may not have content script injected (e.g. chrome:// tabs)
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[MockForge] Broadcast to tabs failed:', err);
+  }
+}
+
 // Load existing logs on startup
 loadLogsFromSessionStorage();
 
@@ -59,6 +84,46 @@ chrome.runtime.onMessage.addListener((message: MockForgeMessage, sender, sendRes
   if (message.type === 'PING') {
     console.log('[MockForge Service Worker] Received PING from tab:', sender.tab?.url);
     sendResponse({ status: 'PONG', receivedAt: Date.now() });
+    return true;
+  }
+
+  // Handle Main World request for active rules
+  if (message.type === 'GET_RULES') {
+    chrome.storage.local
+      .get([STORAGE_KEY_RULES, STORAGE_KEY_GLOBAL_ENABLED])
+      .then((data) => {
+        const rules: MockRule[] = Array.isArray(data[STORAGE_KEY_RULES]) ? data[STORAGE_KEY_RULES] : [];
+        const globalEnabled: boolean = data[STORAGE_KEY_GLOBAL_ENABLED] !== false;
+
+        sendResponse({
+          source: MOCKFORGE_SOURCE,
+          type: 'RULES_UPDATED',
+          rules,
+          globalEnabled,
+        });
+      })
+      .catch(() => {
+        sendResponse({
+          source: MOCKFORGE_SOURCE,
+          type: 'RULES_UPDATED',
+          rules: [],
+          globalEnabled: true,
+        });
+      });
+    return true;
+  }
+
+  // Handle rules update event (from Side Panel)
+  if (message.type === 'RULES_UPDATED') {
+    chrome.storage.local
+      .set({
+        [STORAGE_KEY_RULES]: message.rules,
+        [STORAGE_KEY_GLOBAL_ENABLED]: message.globalEnabled,
+      })
+      .then(() => {
+        broadcastRulesToAllTabs(message.rules, message.globalEnabled);
+        sendResponse({ success: true });
+      });
     return true;
   }
 

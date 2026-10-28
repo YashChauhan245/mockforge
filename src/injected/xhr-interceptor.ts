@@ -1,5 +1,6 @@
 import { InterceptedRequest } from '../types/rule';
 import { MOCKFORGE_SOURCE } from '../types/messages';
+import { getMatchingRule } from './rule-store';
 
 interface MockForgeXHR extends XMLHttpRequest {
   _mockforgeId?: string;
@@ -9,6 +10,28 @@ interface MockForgeXHR extends XMLHttpRequest {
   _mockforgeBody?: string;
   _mockforgeStartTime?: number;
   _mockforgeTimestamp?: number;
+}
+
+/**
+ * Standard HTTP status text mapping.
+ */
+function getStatusText(statusCode: number): string {
+  const map: Record<number, string> = {
+    200: 'OK',
+    201: 'Created',
+    202: 'Accepted',
+    204: 'No Content',
+    301: 'Moved Permanently',
+    302: 'Found',
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    500: 'Internal Server Error',
+    502: 'Bad Gateway',
+    503: 'Service Unavailable',
+  };
+  return map[statusCode] || 'Mocked Response';
 }
 
 /**
@@ -23,7 +46,7 @@ function resolveUrl(url: string | URL): string {
 }
 
 /**
- * Parses raw XHR response headers string (separated by CRLF) into a key-value map.
+ * Parses raw XHR response headers string into a key-value map.
  */
 function parseResponseHeaders(rawHeaders: string | null): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -42,8 +65,7 @@ function parseResponseHeaders(rawHeaders: string | null): Record<string, string>
 }
 
 /**
- * Safely extracts XHR response payload without triggering InvalidStateError
- * when responseType is 'json', 'blob', or 'arraybuffer'.
+ * Safely extracts XHR response payload without triggering InvalidStateError.
  */
 function extractXhrResponseBody(xhr: XMLHttpRequest): string | undefined {
   try {
@@ -66,7 +88,7 @@ function extractXhrResponseBody(xhr: XMLHttpRequest): string | undefined {
       return String(xhr.response);
     }
   } catch {
-    // Non-critical; some browsers restrict response access on abort or early states
+    // Non-critical
   }
   return undefined;
 }
@@ -85,9 +107,6 @@ function extractRequestBody(body: Document | XMLHttpRequestBodyInit | null | und
     }
     if (typeof ArrayBuffer !== 'undefined' && (body instanceof ArrayBuffer || ArrayBuffer.isView(body))) {
       return '[Binary Data]';
-    }
-    if (typeof Document !== 'undefined' && body instanceof Document) {
-      return '[XML Document]';
     }
     return String(body);
   } catch {
@@ -121,7 +140,7 @@ function emitInterceptedRequest(requestData: InterceptedRequest): void {
 
 /**
  * Monkey-patches XMLHttpRequest prototype methods (open, setRequestHeader, send)
- * to intercept and inspect legacy AJAX, Axios, and jQuery requests.
+ * to support traffic inspection and mock short-circuiting.
  */
 export function setupXhrInterceptor(): void {
   if (typeof window === 'undefined' || !window.XMLHttpRequest) return;
@@ -174,7 +193,7 @@ export function setupXhrInterceptor(): void {
     return originalSetRequestHeader.apply(this, [name, value]);
   };
 
-  // 3. Monkey-patch send() to capture request payload and listen for completion
+  // 3. Monkey-patch send() to capture request payload and handle mock short-circuiting
   XMLHttpRequest.prototype.send = function (
     this: XMLHttpRequest,
     body?: Document | XMLHttpRequestBodyInit | null
@@ -184,7 +203,101 @@ export function setupXhrInterceptor(): void {
     xhr._mockforgeStartTime = performance.now();
     xhr._mockforgeTimestamp = Date.now();
 
-    // Attach loadend event listener to capture finished or failed request
+    const url = xhr._mockforgeUrl || window.location.href;
+    const method = xhr._mockforgeMethod || 'GET';
+
+    // ─────────────────────────────────────────────────────────────
+    // Check for Active Mock Rule Short-Circuiting
+    // ─────────────────────────────────────────────────────────────
+    const matchedRule = getMatchingRule(url, method);
+
+    if (matchedRule) {
+      console.log(
+        `%c[MockForge ⚒️ XHR SHORT-CIRCUIT]%c Mocking ${method} ${url} -> Status ${matchedRule.statusCode}`,
+        'color: #10b981; font-weight: bold;',
+        'color: #38bdf8;'
+      );
+
+      const delayMs = matchedRule.delayMs || 0;
+      const responseBody = matchedRule.responseBody || '{}';
+      const statusCode = matchedRule.statusCode || 200;
+      const statusText = getStatusText(statusCode);
+
+      const responseHeaders: Record<string, string> = {
+        'content-type': 'application/json',
+        'x-mockforge-forged': 'true',
+        ...(matchedRule.responseHeaders || {}),
+      };
+
+      const headerString = Object.entries(responseHeaders)
+        .map(([k, v]) => `${k}: ${v}\r\n`)
+        .join('');
+
+      // Override properties on the XHR instance to return synthetic response
+      Object.defineProperty(xhr, 'readyState', { value: 4, writable: false });
+      Object.defineProperty(xhr, 'status', { value: statusCode, writable: false });
+      Object.defineProperty(xhr, 'statusText', { value: statusText, writable: false });
+      Object.defineProperty(xhr, 'responseText', { value: responseBody, writable: false });
+
+      // Handle response property according to responseType
+      Object.defineProperty(xhr, 'response', {
+        get: () => {
+          if (xhr.responseType === 'json') {
+            try {
+              return JSON.parse(responseBody);
+            } catch {
+              return null;
+            }
+          }
+          return responseBody;
+        },
+      });
+
+      // Override header retrieval methods
+      xhr.getAllResponseHeaders = () => headerString;
+      xhr.getResponseHeader = (name: string) => responseHeaders[name.toLowerCase()] || null;
+
+      // Asynchronously trigger completion events to simulate network round-trip
+      setTimeout(() => {
+        const durationMs = Math.round(
+          performance.now() - (xhr._mockforgeStartTime || performance.now())
+        );
+
+        // Emit log to Side Panel
+        emitInterceptedRequest({
+          id: xhr._mockforgeId || generateId(),
+          url,
+          method,
+          statusCode,
+          statusText,
+          durationMs,
+          isMocked: true,
+          matchedRuleId: matchedRule.id,
+          requestHeaders: xhr._mockforgeHeaders || {},
+          requestBody: xhr._mockforgeBody,
+          responseHeaders,
+          responseBody,
+          timestamp: xhr._mockforgeTimestamp || Date.now(),
+        });
+
+        // Dispatch standard XHR event lifecycle
+        xhr.dispatchEvent(new Event('readystatechange'));
+        xhr.onreadystatechange?.(new Event('readystatechange') as any);
+
+        xhr.dispatchEvent(new ProgressEvent('load'));
+        xhr.onload?.(new ProgressEvent('load') as any);
+
+        xhr.dispatchEvent(new ProgressEvent('loadend'));
+        xhr.onloadend?.(new ProgressEvent('loadend') as any);
+      }, delayMs);
+
+      // Return immediately without invoking native originalSend
+      return;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Pass-Through Request (No Rule Matched)
+    // ─────────────────────────────────────────────────────────────
     const handleLoadEnd = () => {
       const durationMs = Math.round(
         performance.now() - (xhr._mockforgeStartTime || performance.now())
@@ -194,8 +307,8 @@ export function setupXhrInterceptor(): void {
 
       emitInterceptedRequest({
         id: xhr._mockforgeId || generateId(),
-        url: xhr._mockforgeUrl || window.location.href,
-        method: xhr._mockforgeMethod || 'GET',
+        url,
+        method,
         statusCode: xhr.status,
         statusText: xhr.statusText || (xhr.status === 0 ? 'Network Error' : undefined),
         durationMs,
@@ -208,7 +321,6 @@ export function setupXhrInterceptor(): void {
       });
     };
 
-    // loadend is guaranteed to fire when request finishes (load, error, timeout, abort)
     this.addEventListener('loadend', handleLoadEnd, { once: true });
 
     try {
@@ -220,8 +332,8 @@ export function setupXhrInterceptor(): void {
 
       emitInterceptedRequest({
         id: xhr._mockforgeId || generateId(),
-        url: xhr._mockforgeUrl || window.location.href,
-        method: xhr._mockforgeMethod || 'GET',
+        url,
+        method,
         statusCode: 0,
         statusText: error instanceof Error ? error.message : 'XHR Send Error',
         durationMs,
@@ -237,5 +349,5 @@ export function setupXhrInterceptor(): void {
     }
   };
 
-  console.log('%c[MockForge ⚒️]%c XMLHttpRequest prototype monkey-patch installed successfully.', 'color: #6366f1; font-weight: bold;', 'color: #94a3b8;');
+  console.log('%c[MockForge ⚒️]%c XMLHttpRequest interceptor and mocking engine installed.', 'color: #6366f1; font-weight: bold;', 'color: #94a3b8;');
 }

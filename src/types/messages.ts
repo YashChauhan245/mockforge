@@ -34,6 +34,15 @@ export interface RulesUpdatedMessage extends BaseMessage {
   globalEnabled: boolean;
 }
 
+export interface GetRulesMessage extends BaseMessage {
+  type: 'GET_RULES';
+}
+
+export interface SetGlobalEnabledMessage extends BaseMessage {
+  type: 'SET_GLOBAL_ENABLED';
+  enabled: boolean;
+}
+
 export interface GetRequestLogsMessage extends BaseMessage {
   type: 'GET_REQUEST_LOGS';
 }
@@ -51,7 +60,8 @@ export type MockForgeMessage =
   | PingMessage
   | RequestInterceptedMessage
   | RulesUpdatedMessage
+  | GetRulesMessage
+  | SetGlobalEnabledMessage
   | GetRequestLogsMessage
   | ClearRequestLogsMessage
   | RequestLogsResponseMessage;
-

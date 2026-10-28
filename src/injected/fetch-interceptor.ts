@@ -1,5 +1,34 @@
 import { InterceptedRequest } from '../types/rule';
 import { MOCKFORGE_SOURCE } from '../types/messages';
+import { getMatchingRule } from './rule-store';
+
+/**
+ * Standard HTTP status code text mapping.
+ */
+function getStatusText(statusCode: number): string {
+  const map: Record<number, string> = {
+    200: 'OK',
+    201: 'Created',
+    202: 'Accepted',
+    204: 'No Content',
+    301: 'Moved Permanently',
+    302: 'Found',
+    304: 'Not Modified',
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    405: 'Method Not Allowed',
+    409: 'Conflict',
+    422: 'Unprocessable Entity',
+    429: 'Too Many Requests',
+    500: 'Internal Server Error',
+    502: 'Bad Gateway',
+    503: 'Service Unavailable',
+    504: 'Gateway Timeout',
+  };
+  return map[statusCode] || 'Mocked Response';
+}
 
 /**
  * Extracts a normalized string URL from various fetch input types (string, URL, Request).
@@ -39,7 +68,7 @@ function extractHeaders(input: RequestInfo | URL, init?: RequestInit): Record<st
       });
     }
   } catch {
-    // Non-critical; fallback to empty headers if Headers parsing fails
+    // Fallback if Headers parsing fails
   }
   return headers;
 }
@@ -106,8 +135,7 @@ function emitInterceptedRequest(requestData: InterceptedRequest): void {
 }
 
 /**
- * Monkey-patches window.fetch to inspect and stream request/response traffic.
- * Uses response.clone() to prevent consuming the webpage's readable body stream.
+ * Monkey-patches window.fetch to inspect, mock, and short-circuit request/response traffic.
  */
 export function setupFetchInterceptor(): void {
   if (typeof window === 'undefined' || !window.fetch) return;
@@ -129,12 +157,68 @@ export function setupFetchInterceptor(): void {
     const timestamp = Date.now();
     const startTime = performance.now();
 
+    // ─────────────────────────────────────────────────────────────
+    // 1. Check for Active Mock Rule Short-Circuiting
+    // ─────────────────────────────────────────────────────────────
+    const matchedRule = getMatchingRule(url, method);
+
+    if (matchedRule) {
+      console.log(
+        `%c[MockForge ⚒️ SHORT-CIRCUIT]%c Mocking ${method} ${url} -> Status ${matchedRule.statusCode}`,
+        'color: #10b981; font-weight: bold;',
+        'color: #38bdf8;'
+      );
+
+      // Simulate artificial latency if defined in rule
+      if (matchedRule.delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, matchedRule.delayMs));
+      }
+
+      const durationMs = Math.round(performance.now() - startTime);
+
+      // Build synthesized headers
+      const headersInit: Record<string, string> = {
+        'content-type': 'application/json',
+        'x-mockforge-forged': 'true',
+        ...(matchedRule.responseHeaders || {}),
+      };
+
+      const responseBody = matchedRule.responseBody || '{}';
+
+      // Emit log to Side Panel
+      emitInterceptedRequest({
+        id: requestId,
+        url,
+        method,
+        statusCode: matchedRule.statusCode || 200,
+        statusText: getStatusText(matchedRule.statusCode || 200),
+        durationMs,
+        isMocked: true,
+        matchedRuleId: matchedRule.id,
+        requestHeaders,
+        requestBody,
+        responseHeaders: headersInit,
+        responseBody,
+        timestamp,
+      });
+
+      // Construct and return synthetic Response (Bypasses real network call)
+      return new Response(responseBody, {
+        status: matchedRule.statusCode || 200,
+        statusText: getStatusText(matchedRule.statusCode || 200),
+        headers: new Headers(headersInit),
+      });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 2. Pass-Through Request (No Rule Matched)
+    // ─────────────────────────────────────────────────────────────
     try {
       const response = await originalFetch.apply(this, [input, init]);
       const durationMs = Math.round(performance.now() - startTime);
       const responseHeaders = extractResponseHeaders(response);
 
-      // Clone the response stream to safely read the payload without draining the application's stream
+      // Clone the response stream to safely read payload without draining host application stream
       const clonedResponse = response.clone();
 
       clonedResponse
@@ -156,7 +240,6 @@ export function setupFetchInterceptor(): void {
           });
         })
         .catch(() => {
-          // If reading cloned stream fails, still emit basic request metrics
           emitInterceptedRequest({
             id: requestId,
             url,
@@ -177,7 +260,6 @@ export function setupFetchInterceptor(): void {
     } catch (error) {
       const durationMs = Math.round(performance.now() - startTime);
 
-      // Emit failed network request
       emitInterceptedRequest({
         id: requestId,
         url,
@@ -193,10 +275,9 @@ export function setupFetchInterceptor(): void {
         timestamp,
       });
 
-      // Always rethrow error to preserve native application promise rejection semantics
       throw error;
     }
   };
 
-  console.log('%c[MockForge ⚒️]%c window.fetch monkey-patch installed successfully.', 'color: #6366f1; font-weight: bold;', 'color: #94a3b8;');
+  console.log('%c[MockForge ⚒️]%c window.fetch interceptor and mocking engine installed.', 'color: #6366f1; font-weight: bold;', 'color: #94a3b8;');
 }

@@ -1,4 +1,4 @@
-import { MOCKFORGE_SOURCE, MockForgeMessage } from '../types/messages';
+import { MOCKFORGE_SOURCE, MockForgeMessage, RulesUpdatedMessage } from '../types/messages';
 
 console.log('%c[MockForge ⚒️]%c Content script bridge active in Isolated World.', 'color: #10b981; font-weight: bold;', 'color: #94a3b8;');
 
@@ -17,16 +17,40 @@ function injectScript() {
 
 injectScript();
 
-// Listen for messages emitted from the page's MAIN world
+// ─────────────────────────────────────────────────────────────
+// 1. Listen for messages emitted from the page's MAIN world
+// ─────────────────────────────────────────────────────────────
 window.addEventListener('message', (event) => {
-  // Only accept events from the current window and matching our source identifier
+  // Only accept events from current window with MockForge source
   if (event.source !== window) return;
   if (!event.data || event.data.source !== MOCKFORGE_SOURCE) return;
 
   const message = event.data as MockForgeMessage;
 
-  // Forward message to the extension's Background Service Worker
-  chrome.runtime.sendMessage(message).catch((err) => {
-    // Service worker may be asleep, safe to ignore transient errors
+  // If Main World is requesting rules on startup, query background worker
+  if (message.type === 'GET_RULES') {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (response && response.type === 'RULES_UPDATED') {
+        window.postMessage(response, '*');
+      }
+    });
+    return;
+  }
+
+  // Forward request logs and metrics to Background Service Worker
+  chrome.runtime.sendMessage(message).catch(() => {
+    // Background worker may be asleep, safe to ignore transient errors
   });
+});
+
+// ─────────────────────────────────────────────────────────────
+// 2. Listen for messages from Background Worker / Side Panel
+// ─────────────────────────────────────────────────────────────
+chrome.runtime.onMessage.addListener((message: MockForgeMessage) => {
+  if (!message || message.source !== MOCKFORGE_SOURCE) return;
+
+  // Forward rule updates down into the MAIN execution context
+  if (message.type === 'RULES_UPDATED' || message.type === 'SET_GLOBAL_ENABLED') {
+    window.postMessage(message, '*');
+  }
 });
